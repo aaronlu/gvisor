@@ -736,6 +736,7 @@ func (l *Loader) startContainer(spec *specs.Spec, conf *Config, cid string, file
 	procArgs.FDTable.DecRef()
 
 	l.processes[eid].tg = tg
+	l.k.SetContainerInit(tg)
 	return nil
 }
 

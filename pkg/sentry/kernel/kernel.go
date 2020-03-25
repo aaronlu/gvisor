@@ -134,6 +134,10 @@ type Kernel struct {
 	// to CreateProcess, and is protected by extMu.
 	globalInit *ThreadGroup
 
+	// containerInit is the thread group whose leader has ID 1 in the container's
+	// PID namespace. This is needed on restore time to recreate loader.processes
+	containerInit []*ThreadGroup
+
 	// realtimeClock is a ktime.Clock based on timekeeper's Realtime.
 	realtimeClock *timekeeperClock
 
@@ -945,6 +949,7 @@ func (k *Kernel) CreateProcess(args CreateProcessArgs) (*ThreadGroup, ThreadID, 
 	tgid := k.tasks.Root.IDOfThreadGroup(tg)
 	if k.globalInit == nil {
 		k.globalInit = tg
+		k.containerInit = append(k.containerInit, tg)
 	}
 	return tg, tgid, nil
 }
@@ -1296,6 +1301,19 @@ func (k *Kernel) GlobalInit() *ThreadGroup {
 	k.extMu.Lock()
 	defer k.extMu.Unlock()
 	return k.globalInit
+}
+
+// SetContainerInit sets the thread group with ID 1 in the PID namespace.
+func (k *Kernel) SetContainerInit(tg *ThreadGroup) {
+	k.extMu.Lock()
+	defer k.extMu.Unlock()
+	k.containerInit = append(k.containerInit, tg)
+}
+
+func (k *Kernel) ContainerInit(cindex int) *ThreadGroup {
+	k.extMu.Lock()
+	defer k.extMu.Unlock()
+	return k.containerInit[cindex]
 }
 
 // TestOnly_SetGlobalInit sets the thread group with ID 1 in the root PID namespace.
