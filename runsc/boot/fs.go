@@ -48,7 +48,7 @@ const (
 	rootFsName = "9p"
 
 	// Device name for root mount.
-	rootDevice = "9pfs-/"
+	rootDevice = "9pfs"
 
 	// MountPrefix is the annotation prefix for mount hints.
 	MountPrefix = "dev.gvisor.spec.mount."
@@ -62,6 +62,17 @@ const (
 	tmpfs    = "tmpfs"
 	nonefs   = "none"
 )
+
+// cindex is used to differentiate session's connID so that on restore,
+// we can figure out to which container the gofer session/inode object belongs to.
+// To serve this purpose, connID is constructed with a specific pattern:
+// 9pfs-cindex/mount_point
+// root will have cindex 0, and child container's cindex starts from 1.
+// This assumes containers are started and restored in exact the same order
+// FIXME: index must be accessed serially, i.e. root container and
+// child containers can't be started/restored at the same time. This
+// seems to be a reasonable assumption.
+var cindex int = 0
 
 // tmpfs has some extra supported options that we must pass through.
 var tmpfsAllowedOptions = []string{"mode", "uid", "gid"}
@@ -199,7 +210,7 @@ func mountDevice(m specs.Mount) string {
 	if m.Type == bind {
 		// Make a device string that includes the target, which is consistent across
 		// S/R and uniquely identifies the connection.
-		return "9pfs-" + m.Destination
+		return "9pfs-" + strconv.Itoa(cindex) + m.Destination
 	}
 	// All other fs types use device "none".
 	return "none"
@@ -616,6 +627,10 @@ func (c *containerMounter) setupFS(conf *Config, procArgs *kernel.CreateProcessA
 	if err := c.mountSubmounts(rootCtx, conf, mns); err != nil {
 		return nil, err
 	}
+
+	// cindex must be incremented after all mount points have been setup
+	// or the submounts could end up with a wrong index value
+	cindex++
 	return mns, nil
 }
 
@@ -723,7 +738,8 @@ func (c *containerMounter) createRootMount(ctx context.Context, conf *Config) (*
 		opts = append(opts, "overlayfs_stale_read")
 	}
 
-	rootInode, err := p9FS.Mount(ctx, rootDevice, mf, strings.Join(opts, ","), nil)
+	dev := fmt.Sprintf("%v-%d/", rootDevice, cindex)
+	rootInode, err := p9FS.Mount(ctx, dev, mf, strings.Join(opts, ","), nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating root mount point: %v", err)
 	}
@@ -926,8 +942,9 @@ func (c *containerMounter) createRestoreEnvironment(conf *Config) (*fs.RestoreEn
 		mf.ReadOnly = true
 	}
 
+	dev := fmt.Sprintf("%v-%d/", rootDevice, cindex)
 	rootMount := fs.MountArgs{
-		Dev:        rootDevice,
+		Dev:        dev,
 		Flags:      mf,
 		DataString: strings.Join(opts, ","),
 	}
@@ -954,6 +971,8 @@ func (c *containerMounter) createRestoreEnvironment(conf *Config) (*fs.RestoreEn
 			return nil, err
 		}
 	}
+
+	cindex++
 
 	return renv, nil
 }
