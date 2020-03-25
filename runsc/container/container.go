@@ -437,7 +437,11 @@ func (c *Container) Start(conf *boot.Config) error {
 			}
 			c.Spec.Mounts = cleanMounts
 
-			return c.Sandbox.StartContainer(c.Spec, conf, c.ID, ioFiles)
+			if conf.RestoreFile != "" {
+				return c.Sandbox.RestoreContainer(c.Spec, conf, c.ID, ioFiles)
+			} else {
+				return c.Sandbox.StartContainer(c.Spec, conf, c.ID, ioFiles)
+			}
 		}); err != nil {
 			return err
 		}
@@ -468,9 +472,9 @@ func (c *Container) Start(conf *boot.Config) error {
 	return c.adjustGoferOOMScoreAdj()
 }
 
-// Restore takes a container and replaces its kernel and file system
+// RestoreRoot takes a container and replaces its kernel and file system
 // to restore a container from its state file.
-func (c *Container) Restore(spec *specs.Spec, conf *boot.Config, restoreFile string) error {
+func (c *Container) RestoreRoot(spec *specs.Spec, conf *boot.Config, restoreFile string) error {
 	log.Debugf("Restore container %q", c.ID)
 	if err := c.Saver.lock(); err != nil {
 		return err
@@ -489,11 +493,22 @@ func (c *Container) Restore(spec *specs.Spec, conf *boot.Config, restoreFile str
 		}
 	}
 
-	if err := c.Sandbox.Restore(c.ID, spec, conf, restoreFile); err != nil {
+	if err := c.Sandbox.RestoreRoot(c.ID, spec, conf, restoreFile); err != nil {
 		return err
 	}
 	c.changeStatus(Running)
 	return c.saveLocked()
+}
+
+func (c *Container) Restore(spec *specs.Spec, conf *boot.Config, restoreFile string) error {
+	log.Debugf("Restore container %q", c.ID)
+	if isRoot(spec) {
+		return c.RestoreRoot(spec, conf, restoreFile)
+	} else {
+		// container restore is like container start, except when invoking
+		// rpc request, invoke restore instead of start. See c.Start().
+		return c.Start(conf)
+	}
 }
 
 // Run is a helper that calls Create + Start + Wait.
