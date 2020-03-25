@@ -672,10 +672,20 @@ func (l *Loader) startContainer(spec *specs.Spec, conf *Config, cid string, file
 		return fmt.Errorf("creating new process: %v", err)
 	}
 
-	// setupContainerFS() dups stdioFDs, so we don't need to dup them here.
+	// For reasons similarly to what we have fixed for root container, we
+	// require child containers stdioFDs also sarting at fixed locations:
+	// (cindex+1) * 64. With this rule, we can avoid panic on restore due
+	// to host FS inodes of child containers.
+	fd := (l.ctrl.manager.cindex + 1) * startingStdioFD
 	var stdioFDs []int
 	for _, f := range files[:3] {
-		stdioFDs = append(stdioFDs, int(f.Fd()))
+		// FIXME: set O_CLOEXEC will fail
+		err := syscall.Dup3(int(f.Fd()), fd, 0)
+		if err != nil {
+			return fmt.Errorf("failed to dup3: %v", err)
+		}
+		stdioFDs = append(stdioFDs, fd)
+		fd++
 	}
 
 	// Create the FD map, which will set stdin, stdout, and stderr.
@@ -684,6 +694,15 @@ func (l *Loader) startContainer(spec *specs.Spec, conf *Config, cid string, file
 	if err != nil {
 		return fmt.Errorf("importing fds: %v", err)
 	}
+
+	// after createFDTable, the dup()ed FD is no longer needed
+	for _, fd := range stdioFDs {
+		err := syscall.Close(fd)
+		if err != nil {
+			return fmt.Errorf("failed to close dup()ed FD: %v", err)
+		}
+	}
+
 	// CreateProcess takes a reference on fdTable if successful. We won't
 	// need ours either way.
 	procArgs.FDTable = fdTable

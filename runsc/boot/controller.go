@@ -181,6 +181,9 @@ type containerManager struct {
 
 	// l is the loader that creates containers and sandboxes.
 	l *Loader
+
+	// cindex is the current index of the containers inside a sandbox
+	cindex int
 }
 
 // StartRoot will start the root container process.
@@ -203,7 +206,11 @@ func (cm *containerManager) Processes(cid *string, out *[]*control.Process) erro
 // Create creates a container within a sandbox.
 func (cm *containerManager) Create(cid *string, _ *struct{}) error {
 	log.Debugf("containerManager.Create: %q", *cid)
-	return cm.l.createContainer(*cid)
+	err := cm.l.createContainer(*cid)
+	if err == nil {
+		cm.cindex++
+	}
+	return err
 }
 
 // StartArgs contains arguments to the Start method.
