@@ -216,7 +216,7 @@ func (cm *containerManager) StartRoot(cid *string, _ *struct{}) error {
 // Processes retrieves information about processes running in the sandbox.
 func (cm *containerManager) Processes(cid *string, out *[]*control.Process) error {
 	log.Debugf("containerManager.Processes: %q", *cid)
-	return control.Processes(cm.l.k, *cid, out)
+	return control.Processes(cm.l.k, cm.l.containers[*cid], out)
 }
 
 // Create creates a container within a sandbox.

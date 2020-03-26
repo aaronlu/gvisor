@@ -313,7 +313,7 @@ func New(args Args) (*Loader, error) {
 	dogOpts.TaskTimeoutAction = args.Conf.WatchdogAction
 	dog := watchdog.New(k, dogOpts)
 
-	procArgs, err := newProcess(args.ID, args.Spec, creds, k, k.RootPIDNamespace())
+	procArgs, err := newProcess(0, args.Spec, creds, k, k.RootPIDNamespace())
 	if err != nil {
 		return nil, fmt.Errorf("creating init process for root container: %v", err)
 	}
@@ -384,7 +384,7 @@ func New(args Args) (*Loader, error) {
 }
 
 // newProcess creates a process that can be run with kernel.CreateProcess.
-func newProcess(id string, spec *specs.Spec, creds *auth.Credentials, k *kernel.Kernel, pidns *kernel.PIDNamespace) (kernel.CreateProcessArgs, error) {
+func newProcess(index int, spec *specs.Spec, creds *auth.Credentials, k *kernel.Kernel, pidns *kernel.PIDNamespace) (kernel.CreateProcessArgs, error) {
 	// Create initial limits.
 	ls, err := createLimitSet(spec)
 	if err != nil {
@@ -403,7 +403,7 @@ func newProcess(id string, spec *specs.Spec, creds *auth.Credentials, k *kernel.
 		UTSNamespace:            k.RootUTSNamespace(),
 		IPCNamespace:            k.RootIPCNamespace(),
 		AbstractSocketNamespace: k.RootAbstractSocketNamespace(),
-		ContainerID:             id,
+		ContainerIndex:          index,
 		PIDNamespace:            pidns,
 	}
 
@@ -676,7 +676,7 @@ func (l *Loader) startContainer(spec *specs.Spec, conf *Config, cid string, file
 	} else {
 		pidns = l.k.RootPIDNamespace()
 	}
-	procArgs, err := newProcess(cid, spec, creds, l.k, pidns)
+	procArgs, err := newProcess(l.containers[cid], spec, creds, l.k, pidns)
 	if err != nil {
 		return fmt.Errorf("creating new process: %v", err)
 	}
@@ -808,7 +808,7 @@ func (l *Loader) destroyContainer(cid string) error {
 		// Wait for all processes that belong to the container to exit (including
 		// exec'd processes).
 		for _, t := range l.k.TaskSet().Root.Tasks() {
-			if t.ContainerID() == cid {
+			if t.ContainerIndex() == l.containers[cid] {
 				t.ThreadGroup().WaitExited()
 			}
 		}
@@ -850,6 +850,7 @@ func (l *Loader) executeAsync(args *control.ExecArgs) (kernel.ThreadID, error) {
 	if !started {
 		return 0, fmt.Errorf("container %q not started", args.ContainerID)
 	}
+	args.ContainerIndex = l.containers[args.ContainerID]
 
 	// TODO(gvisor.dev/issue/1623): Add VFS2 support
 
@@ -936,8 +937,9 @@ func (l *Loader) waitPID(tgid kernel.ThreadID, cid string, waitStatus *uint32) e
 	if tg == nil {
 		return fmt.Errorf("waiting for PID %d: no such process", tgid)
 	}
-	if tg.Leader().ContainerID() != cid {
-		return fmt.Errorf("process %d is part of a different container: %q", tgid, tg.Leader().ContainerID())
+	if tg.Leader().ContainerIndex() != l.containers[cid] {
+		// TODO: convert index to ID for readability
+		return fmt.Errorf("process %d is part of a different container: %d", tgid, tg.Leader().ContainerIndex())
 	}
 	ws := l.wait(tg)
 	*waitStatus = ws
@@ -1111,8 +1113,9 @@ func (l *Loader) signalProcess(cid string, tgid kernel.ThreadID, signo int32) er
 	if tg == nil {
 		return fmt.Errorf("no such process with PID %d", tgid)
 	}
-	if tg.Leader().ContainerID() != cid {
-		return fmt.Errorf("process %d is part of a different container: %q", tgid, tg.Leader().ContainerID())
+	if tg.Leader().ContainerIndex() != l.containers[cid] {
+		// TODO: convert index to ID for readability
+		return fmt.Errorf("process %d is part of a different container: %d", tgid, tg.Leader().ContainerIndex())
 	}
 	return l.k.SendExternalSignalThreadGroup(tg, &arch.SignalInfo{Signo: signo})
 }
@@ -1155,7 +1158,7 @@ func (l *Loader) signalAllProcesses(cid string, signo int32) error {
 	// sent to the entire container.
 	l.k.Pause()
 	defer l.k.Unpause()
-	return l.k.SendContainerSignal(cid, &arch.SignalInfo{Signo: signo})
+	return l.k.SendContainerSignal(l.containers[cid], &arch.SignalInfo{Signo: signo})
 }
 
 // threadGroupFromID same as threadGroupFromIDLocked except that it acquires
