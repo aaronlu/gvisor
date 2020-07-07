@@ -95,6 +95,44 @@ func (ep *Endpoint) futexSwitchFromPeer() error {
 	}
 }
 
+func (ep *Endpoint) futexRoundTrip() error {
+	// Update connection state to indicate that the peer should be active.
+	if !atomic.CompareAndSwapUint32(ep.connState(), ep.activeState, ep.inactiveState) {
+		switch cs := atomic.LoadUint32(ep.connState()); cs {
+		case csShutdown:
+			return ShutdownError{}
+		default:
+			return fmt.Errorf("unexpected connection state before FUTEX_SWAP: %v", cs)
+		}
+	}
+
+	// futex swap
+	if err := ep.futexSwapConnState(ep.inactiveState); err != nil {
+		return fmt.Errorf("failed to FUTEX_SWAP for peer Endpoint: %v", err)
+	}
+
+	// test if we should wake
+	// if not, enter futex wait state
+	for {
+		switch cs := atomic.LoadUint32(ep.connState()); cs {
+		case ep.activeState:
+			return nil
+		case ep.inactiveState:
+			if ep.isShutdownLocally() {
+				return ShutdownError{}
+			}
+			if err := ep.futexWaitConnState(ep.inactiveState); err != nil {
+				return fmt.Errorf("failed to FUTEX_WAIT for peer Endpoint: %v", err)
+			}
+			continue
+		case csShutdown:
+			return ShutdownError{}
+		default:
+			return fmt.Errorf("unexpected connection state after FUTEX_SWAP: %v", cs)
+		}
+	}
+}
+
 func (ep *Endpoint) futexWakeConnState(numThreads int32) error {
 	if _, _, e := syscall.RawSyscall(syscall.SYS_FUTEX, ep.packet, linux.FUTEX_WAKE, uintptr(numThreads)); e != 0 {
 		return e
@@ -104,6 +142,14 @@ func (ep *Endpoint) futexWakeConnState(numThreads int32) error {
 
 func (ep *Endpoint) futexWaitConnState(curState uint32) error {
 	_, _, e := syscall.Syscall6(syscall.SYS_FUTEX, ep.packet, linux.FUTEX_WAIT, uintptr(curState), 0, 0, 0)
+	if e != 0 && e != syscall.EAGAIN && e != syscall.EINTR {
+		return e
+	}
+	return nil
+}
+
+func (ep *Endpoint) futexSwapConnState(curState uint32) error {
+	_, _, e := syscall.Syscall6(syscall.SYS_FUTEX, ep.packet, 13/*linux.FUTEX_SWAP*/, uintptr(curState), 0, ep.packet, 0)
 	if e != 0 && e != syscall.EAGAIN && e != syscall.EINTR {
 		return e
 	}

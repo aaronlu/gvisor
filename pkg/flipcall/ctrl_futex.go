@@ -92,13 +92,10 @@ func (ep *Endpoint) ctrlWaitFirst() error {
 }
 
 func (ep *Endpoint) ctrlRoundTrip() error {
-	if err := ep.futexSwitchToPeer(); err != nil {
-		return err
-	}
 	if err := ep.enterFutexWait(); err != nil {
 		return err
 	}
-	err := ep.futexSwitchFromPeer()
+	err := ep.futexRoundTrip()
 	ep.exitFutexWait()
 	return err
 }
